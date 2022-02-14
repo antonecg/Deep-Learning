@@ -1,0 +1,2435 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "colab_type": "text",
+    "id": "view-in-github"
+   },
+   "source": [
+    "<a href=\"https://colab.research.google.com/github/huggingface/blog/blob/notebook_update_may15/notebooks/01_how_to_train.ipynb\" target=\"_parent\"><img src=\"https://colab.research.google.com/assets/colab-badge.svg\" alt=\"Open In Colab\"/></a>"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "cellView": "form",
+    "colab": {
+     "base_uri": "https://localhost:8080/",
+     "height": 100
+    },
+    "colab_type": "code",
+    "id": "e67Ut53QYEdU",
+    "outputId": "437871b8-b8ac-4eaf-c2e1-61d801c5e6b2"
+   },
+   "outputs": [],
+   "source": []
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "colab_type": "text",
+    "id": "M1oqh0F6W3ad"
+   },
+   "source": [
+    "# How to train a new language model from scratch using Transformers and Tokenizers\n",
+    "\n",
+    "### Notebook edition (link to blogpost [link](https://huggingface.co/blog/how-to-train)). Last update May 15, 2020\n",
+    "\n",
+    "\n",
+    "Over the past few months, we made several improvements to our [`transformers`](https://github.com/huggingface/transformers) and [`tokenizers`](https://github.com/huggingface/tokenizers) libraries, with the goal of making it easier than ever to **train a new language model from scratch**.\n",
+    "\n",
+    "In this post we’ll demo how to train a “small” model (84 M parameters = 6 layers, 768 hidden size, 12 attention heads) – that’s the same number of layers & heads as DistilBERT – on **Esperanto**. We’ll then fine-tune the model on a downstream task of part-of-speech tagging.\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "colab_type": "text",
+    "id": "oK7PPVm2XBgr"
+   },
+   "source": [
+    "## 1. Find a dataset\n",
+    "\n",
+    "First, let us find a corpus of text in Esperanto. Here we’ll use the Esperanto portion of the [OSCAR corpus](https://traces1.inria.fr/oscar/) from INRIA.\n",
+    "OSCAR is a huge multilingual corpus obtained by language classification and filtering of [Common Crawl](https://commoncrawl.org/) dumps of the Web.\n",
+    "\n",
+    "<img src=\"https://huggingface.co/blog/assets/01_how-to-train/oscar.png\" style=\"margin: auto; display: block; width: 260px;\">\n",
+    "\n",
+    "The Esperanto portion of the dataset is only 299M, so we’ll concatenate with the Esperanto sub-corpus of the [Leipzig Corpora Collection](https://wortschatz.uni-leipzig.de/en/download), which is comprised of text from diverse sources like news, literature, and wikipedia.\n",
+    "\n",
+    "The final training corpus has a size of 3 GB, which is still small – for your model, you will get better results the more data you can get to pretrain on. \n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 1,
+   "metadata": {
+    "colab": {},
+    "colab_type": "code",
+    "id": "HOk4iZ9YZvec"
+   },
+   "outputs": [],
+   "source": [
+    "# in this notebook we'll only get one of the files (the Oscar one) for the sake of simplicity and performance\n",
+    "#!wget -c https://cdn-datasets.huggingface.co/EsperBERTo/data/oscar.eo.txt"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 2,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# import transformers\n",
+    "# transformers.AutoModelForCausalLM"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "colab_type": "text",
+    "id": "G-kkz81OY6xH"
+   },
+   "source": [
+    "## 2. Train a tokenizer\n",
+    "\n",
+    "We choose to train a byte-level Byte-pair encoding tokenizer (the same as GPT-2), with the same special tokens as RoBERTa. Let’s arbitrarily pick its size to be 52,000.\n",
+    "\n",
+    "We recommend training a byte-level BPE (rather than let’s say, a WordPiece tokenizer like BERT) because it will start building its vocabulary from an alphabet of single bytes, so all words will be decomposable into tokens (no more `<unk>` tokens!).\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 3,
+   "metadata": {
+    "colab": {},
+    "colab_type": "code",
+    "id": "5duRggBRZKvP"
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Collecting git+https://github.com/huggingface/transformers\n",
+      "  Cloning https://github.com/huggingface/transformers to /tmp/pip-req-build-meoa2zlb\n",
+      "  Running command git clone -q https://github.com/huggingface/transformers /tmp/pip-req-build-meoa2zlb\n",
+      "Requirement already satisfied (use --upgrade to upgrade): transformers==3.0.2 from git+https://github.com/huggingface/transformers in /home/taylor/anaconda3/lib/python3.7/site-packages\n",
+      "Requirement already satisfied: numpy in /home/taylor/anaconda3/lib/python3.7/site-packages (from transformers==3.0.2) (1.18.1)\n",
+      "Requirement already satisfied: tokenizers==0.8.1.rc2 in /home/taylor/anaconda3/lib/python3.7/site-packages (from transformers==3.0.2) (0.8.1rc2)\n",
+      "Requirement already satisfied: packaging in /home/taylor/anaconda3/lib/python3.7/site-packages (from transformers==3.0.2) (20.3)\n",
+      "Requirement already satisfied: filelock in /home/taylor/anaconda3/lib/python3.7/site-packages (from transformers==3.0.2) (3.0.12)\n",
+      "Requirement already satisfied: requests in /home/taylor/anaconda3/lib/python3.7/site-packages (from transformers==3.0.2) (2.21.0)\n",
+      "Requirement already satisfied: tqdm>=4.27 in /home/taylor/anaconda3/lib/python3.7/site-packages (from transformers==3.0.2) (4.46.0)\n",
+      "Requirement already satisfied: regex!=2019.12.17 in /home/taylor/anaconda3/lib/python3.7/site-packages (from transformers==3.0.2) (2020.7.14)\n",
+      "Requirement already satisfied: sentencepiece!=0.1.92 in /home/taylor/anaconda3/lib/python3.7/site-packages (from transformers==3.0.2) (0.1.91)\n",
+      "Requirement already satisfied: sacremoses in /home/taylor/anaconda3/lib/python3.7/site-packages (from transformers==3.0.2) (0.0.43)\n",
+      "Requirement already satisfied: six in /home/taylor/anaconda3/lib/python3.7/site-packages (from packaging->transformers==3.0.2) (1.14.0)\n",
+      "Requirement already satisfied: pyparsing>=2.0.2 in /home/taylor/anaconda3/lib/python3.7/site-packages (from packaging->transformers==3.0.2) (2.4.7)\n",
+      "Requirement already satisfied: certifi>=2017.4.17 in /home/taylor/anaconda3/lib/python3.7/site-packages (from requests->transformers==3.0.2) (2020.6.20)\n",
+      "Requirement already satisfied: chardet<3.1.0,>=3.0.2 in /home/taylor/anaconda3/lib/python3.7/site-packages (from requests->transformers==3.0.2) (3.0.4)\n",
+      "Requirement already satisfied: idna<2.9,>=2.5 in /home/taylor/anaconda3/lib/python3.7/site-packages (from requests->transformers==3.0.2) (2.8)\n",
+      "Requirement already satisfied: urllib3<1.25,>=1.21.1 in /home/taylor/anaconda3/lib/python3.7/site-packages (from requests->transformers==3.0.2) (1.24.3)\n",
+      "Requirement already satisfied: joblib in /home/taylor/anaconda3/lib/python3.7/site-packages (from sacremoses->transformers==3.0.2) (0.14.1)\n",
+      "Requirement already satisfied: click in /home/taylor/anaconda3/lib/python3.7/site-packages (from sacremoses->transformers==3.0.2) (7.0)\n",
+      "Building wheels for collected packages: transformers\n",
+      "  Building wheel for transformers (setup.py) ... \u001b[?25ldone\n",
+      "\u001b[?25h  Created wheel for transformers: filename=transformers-3.0.2-py3-none-any.whl size=810726 sha256=f9eb0cf6bdad5b114c2207d9a71d5ba17f51c201b13cfb9103b8db74fa5c7e78\n",
+      "  Stored in directory: /tmp/pip-ephem-wheel-cache-5a6r6ztv/wheels/35/2e/a7/d819e3310040329f0f47e57c9e3e7a7338aa5e74c49acfe522\n",
+      "Successfully built transformers\n",
+      "tokenizers                         0.8.1rc2           \n",
+      "transformers                       3.0.2              \n"
+     ]
+    }
+   ],
+   "source": [
+    "# We won't need TensorFlow here\n",
+    "#!pip uninstall -y tensorflow\n",
+    "# Install `transformers` from master\n",
+    "!pip install git+https://github.com/huggingface/transformers\n",
+    "!pip list | grep -E 'transformers|tokenizers'\n",
+    "# transformers version at notebook update --- 2.11.0\n",
+    "# tokenizers version at notebook update --- 0.8.0rc1"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 57,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "[nltk_data] Downloading package stopwords to /home/taylor/nltk_data...\n",
+      "[nltk_data]   Unzipping corpora/stopwords.zip.\n"
+     ]
+    }
+   ],
+   "source": [
+    "import pandas as pd\n",
+    "from tqdm import tqdm\n",
+    "import nltk\n",
+    "from nltk.corpus import stopwords\n",
+    "nltk.download('stopwords')\n",
+    "from nltk.tokenize import word_tokenize"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 76,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "\n",
+    "    "
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 102,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "                                                  text  index\n",
+      "0                                                    1      0\n",
+      "1    ['\\nAs a reminder, this subreddit [is for civi...      1\n",
+      "2                     ['Reality TV has gone too far.']      2\n",
+      "3          ['Endorsed by elon!', \".. O that's funny!\"]      3\n",
+      "4                                        ['[deleted]']      4\n",
+      "..                                                 ...    ...\n",
+      "420  ['Why is it always people in higher/upper clas...    420\n",
+      "421                                ['Absolutely not.']    421\n",
+      "422                      ['I hope you are right man.']    422\n",
+      "423  ['You know Kanye isn’t going to be under any o...    423\n",
+      "424                                      ['I will be']    424\n",
+      "\n",
+      "[425 rows x 2 columns]\n"
+     ]
+    }
+   ],
+   "source": [
+    "stop = stopwords.words('english')\n",
+    "#custom\n",
+    "Remove= ['and ','the ','is ','this ','a ', '\\n', '[', ']']\n",
+    "\n",
+    "data = pd.read_csv('reddit.csv', error_bad_lines=False);\n",
+    "# We only need the Headlines text column from the data\n",
+    "data_text = data[:300000][['text']];\n",
+    "data_text['index'] = data_text.index\n",
+    "\n",
+    "\n",
+    "\n",
+    "\n",
+    "data = data_text..tolist()\n",
+    "data = data.replace(\"\\n\",\" \")\n",
+    "data = data.replace(\"[\",\" \")\n",
+    "\n",
+    "data = data.replace(\"]\",\" \")\n",
+    "data = data.replace(\"]\",\" \")\n",
+    "data = data.apply(lambda x: [item for item in x if item not in stop])\n",
+    "data = data.apply(lambda x: [item for item in x if item not in Remove])\n",
+    "data = data.replace(Remove,\"\")\n",
+    "\n",
+    "print (data)\n",
+    "\n",
+    "\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 103,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "\n",
+    "\n",
+    "# data['text']\n",
+    "temp = [] \n",
+    "for key, value in data.T.to_dict().items():\n",
+    "#     print(element)\n",
+    "    if len(value['text']) <= 512:\n",
+    "        temp.append(value)\n",
+    "    \n",
+    "temp\n",
+    "\n",
+    "with open(\"RedditText.txt\", \"w\") as output:\n",
+    "    for element in temp:\n",
+    "        output.write(element['text'].replace(\"[\", \"\").replace(\"'\",\"\").replace(\"]\",\"\").replace(\"\\n\",\"\") + \"\\n\")\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 79,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "1\n",
+      "Reality TV has gone too far.\n",
+      "Endorsed by elon!, \".. O thats funny!\"\n",
+      "deleted\n",
+      "Trump 100% told him to do this to sway the black vote from Biden\n",
+      "distraction(https://hips.hearstapps.com/hmg-prod.s3.amazonaws.com/images/president-elect-donald-trump-and-kanye-west-stand-together-news-photo-1586966279.jpg?resize=768:*)\n",
+      "Everyone is laughing just like everyone laughed when Trump first announced\n",
+      "What’s the gambit?, To water down the young and black vote for Biden?\n",
+      "Another loser wants to be trump as a publicity stunt., Just prior to his album release.\n",
+      "Literally going to go out of my way to vote for him.\n",
+      "The hero we need!\n",
+      "I hate this year.\n",
+      "Kanye was so great now he’s just a clown\n",
+      "Shit., Imagine Kanye as President..\\n\\nI’ll take him over Trump.\n",
+      "Because why the fuck not at this point., Also fuck him and the kardashians.\n",
+      "Well he just stole the 40 year old white hipster vote from Biden.\n",
+      "This is entirely designed to draw the black vote and the young vote away from Biden to help Trump.\n",
+      "\"Didnt he just say he was voting for Traitor-in-chief.\", \"Kanye West signals hell vote for Donald Trump in 2020: We know who Im voting on(https://www.businessinsider.com/kanye-west-signals-hell-vote-for-donald-trump-in-2020-2020-4)\"\n",
+      "Cynical ploy in hopes of pulling minority votes from Democrats to help his boy Trump?, Me thinks so.\n",
+      "This seems like the worst time for something like this., At best it’s extremely short-sighted from Kanye, at worst its a pro-Trump play to take Biden’s African-American voters., Really not a fan of this and I like Kanye\n",
+      "Call it a Late Registration\n",
+      "Great another Hollywood rich guy who thinks he is qualified to lead a country., Considering he has entered the race 4ish months before the election he is clearly serious about becoming president.\n",
+      "This is gonna fuck over Biden., I hate Kanye even more now.\n",
+      "What is this timeline?, What if we just act like this didn’t happen and completely ignore it?\n",
+      "🌹 twitter’s new favorite candidate 🙄🙄\n",
+      "*You just know Kaitlin Jenner is going to be VP., *\n",
+      "At least this means no matter what Biden isn’t getting elected🤷🏽\\u200d♂️\n",
+      "I’m curious to see how the news handles this., They blew trying to properly cover a celebrity in politics in 2016 with Trump, so I’m interested to see if they learned anything this time around\n",
+      "\"Hes not gonna be on the ballot in most states, even if hes serious.\"\n",
+      "Is this a troll?\n",
+      "What an absolute moron.\n",
+      "A vote for Kanye is a vote for Trump.\n",
+      "Always doing stupid shit for attention.\n",
+      "I miss the old Kanye.....\n",
+      "I’m voting Kanye over Biden let’s gooo., I just found out in my friends group chat, everybody hyped now., Many will go out and vote Kanye over Biden!\n",
+      "I am *this* close to fucking give up on this timeline., \"Thankfully, this wont go anywhere.\"\n",
+      "What a fucking moron.\n",
+      "ah, i can finally check something off my 2020 bingo card\n",
+      "This has to be a joke, right?, Because I swear if he takes votes away from Biden and we get 4 more years of this shitshow!\n",
+      "Isn’t Kanye still slightly mentally ill?, What does that matter Trump was voted in and he was clearly 100% visibly mentally unstable, it was maybe even mentioned prior to him getting office and all the way through his campaign.\n",
+      "I think you only have till August to run as a third party candidate?, Yeah this isn’t a distraction 🤦\\u200d♂️\n",
+      "The only things Kanye needs are a lot of meds and some of that ever elusive humility.\n",
+      "Maybe he should marry another Kardashian,why not\n",
+      "I gave this country the benefit of the doubt., 2020 changed that., I genuinely HATE this country now., What a joke.\n",
+      "I like Kanye, but this is ridiculous., I don’t want anybody else diverting votes from the people who should really take charge of the office\n",
+      "Kanye is a Trump fan., This is intended to help Trump., Some people will absolutely waste their votes on Kanye West., Many of these will be the young and minority voters who will make a difference.\n",
+      "What has America and this world come too\n",
+      "Bad idea., This country doesn’t want a third party let alone a third party candidate.\n",
+      "He needs signatures in every state to get on the ballot by certain dates., I doubt if he has the organization to have people collect signatures in every state., I think this is a publicity stunt for next album release.\n",
+      "Pretty obvious (and desperate) ploy to negate Biden’s black vote.\n",
+      "he better run as an independent lmao\n",
+      "Damn it!, \"Hell probably end up taking votes away from Vermin Supreme and this was definitely his year\"\n",
+      "\"Well fortunately theres a lot more to appearing on a Presidential ballot than declaring your candidacy on Twitter.\", \"Kanye can go to sleep tonight happy with the attention hes gotten today, and the rest of us can go to sleep knowing that he wont actually appear on ballots anywhere.\"\n",
+      "\"Its like we need another idiot in office.\"\n",
+      "\"Its racist and ignorant to assume that black people will vote for any black face on the ballot.\", Some of you really need to check yourselves.\n",
+      "Yeah I hate this\n",
+      "Here come the pointless write-in votes\n",
+      "LOL., This announcement will age about as well as Jesus Is King.\n",
+      "Hes said this for a year and half now., Its clearly not happening.\n",
+      "Fuck me\n",
+      "our future first ladies just keep getting trashier and trashier\n",
+      "\"Hes got my vote o7\"\n",
+      "This fucking guy.\n",
+      "Can we just go back to ignoring Kanye\n",
+      "If this somehow puts Trump over Biden in November, this country deserves every shitty, stupid thing that happens to it.\n",
+      "Guys I promise even though Kanye had suggested a few months ago that he would still vote for Trump a lot has happened since plus the ton of evidence came out he might’ve been faking his support for prison reform., So I very much doubt Kanye is hurting his face in order to steal votes from Biden for Trump., Enough with that theory., Most likely he’s doing this for album hype., Also it needs to be realized that politics is a complete shitshow.\n",
+      "No.\n",
+      "This would 100% hand the election to Trump., He will cost Trump zero voters and will cost Biden enough to matter., This is a huge vanity play that is going to fuck minorities, the marginalized, what’s left of the middle class and the American general public for 4  more years and however many years it take the country to recover.\n",
+      "\"Hell be as successful as Bloomberg.\"\n",
+      "Thank you Yeezus 🙏\n",
+      "Yeah and also Biden has the best weapon to get the black vote : Obama., Kanye West is nothing compared to Obama when it comes to popularity overall and not just among African American voters.\n",
+      "Can we just appreciate the fact that this doesn’t shock anyone?, Like if this was last year we would’ve lost our minds but in 2020 we’re all just like “yeah this makes sense, it’s weird, but whatever”\n",
+      "lmao., Do you know how hard it is to get on the ballot in any state as an independent candidate?, The filing deadlines for states are already closing in a lot of places., \"Methinks this vanity project doesnt have any strategy or organization to it, and probably isnt a real thing.\", lol bye.\n",
+      "So um any way you look at it he would run against Trump... Not buddies anymore?\n",
+      "Because he wants trump to win for some insane reason.\n",
+      "President of what?\n",
+      "No.\n",
+      "Fuck this shit., Trump has a high floor as far as his base., Low 40’s., If he were to take even a couple of points from Biden’s vote  as a write in candidate in battleground states we are seeing 4 more years of Trump., Young people are already not enthused to vote for Biden this is just despicable.\n",
+      "\"Doesnt he say this every presidential election?\"\n",
+      "Looks like Trump asked his buddy for a favor.\n",
+      " You have got to be fucking kidding me.\n",
+      "removed\n",
+      "We could, to be clear, not talk about this., We could just not engage with this particular tweet/story., \"Im not saying you shouldnt engage.\", You should if you want to., \"I just think people sometimes forget that theres another option.\", Also, New Yorker called it: https://twitter.com/NewYorker/status/1279593485583159296\n",
+      "\"Crickets Chirping\"\n",
+      "I want to die.\n",
+      "Man it looks like all the villains are taking off their masks right now.\n",
+      "\"I just wish hed run as a green candidate.\", \"People worried about this need to understand that hes running as an evangelical christian.\", \"We dont know who hell take votes from.\", He might run to the right of Ronald Reagan., Hell, he could actually win!\n",
+      "The bingo card is really getting crowded at this point.\n",
+      "It’s 2020., Of course\n",
+      "\"Wait, so who gets the Christian GOP vote?\", The guy talking about being a born again Christian, and putting out an entire album about Jesus, or the white guy?\n",
+      "Finally., /s\n",
+      "What\n",
+      "These are signs of the end of a civilization., It is so sad to see political discourse be ruined and degraded with nonsense celebrities yet again.\n",
+      "Huge Kanye stan here., \"Just dont man...\"\n",
+      "Hard pass.\n",
+      "Jesus walks, Kanye runs., #ye2020\n",
+      "\"Anyone who flirts with the idea that Kanye will detract a substantial amount of black voters from Bidens base, is clearly not in the black community.\"\n",
+      "Somebody give him his pills.\n",
+      "/r/the_ye\n",
+      "Dwayne Mountain Dew Elizondo Camacho 2020\n",
+      "king shit\n",
+      "Wow., This is a way to strip Black American votes from Biden., Good job for the cunning Republican strategists.\n",
+      "Everyone is saying splitting the black vote, but I think this is actually gonna split the shitposter vote., I feel like 40% of trump voters would flip for Kanye Musk\n",
+      "What a fucking idiot, must be off his psych meds again.\n",
+      "God I’m so ready for this timeline to end., Honestly., Can we just go on to 2021 and be done with this shit now?\n",
+      "Is it just me or, watching cable news and reading this on this 4th of July, we have reached some singularity of surreality?\n",
+      "The fact that people are even a little concerned about this really shows our (justifiably) low opinion of many American voters.\n",
+      "Fuck Kanye.\n",
+      "I think being in reality tv or entertainment should disqualify any one from becoming president., Look at what misery “celebrities” have brought our country.\n",
+      "Mad dash to pull the youth and black vote away from Biden., The guy straight up had a MAGA hat on and said slavery was a choice.\n",
+      "...does he really think he can divide the black vote for Trump?\n",
+      "Y’all could have had Bernie now you get Kanye Ye2020\n",
+      "I’m voting for Kanye and none of you mfers can change my mind\n",
+      "Kanye obviously  feels the *crazy* subgroup of voters lack representation.\n",
+      "This seems like it was ordered up by trump, because only he would not understand how bad Kanye is hated by black people over these last few years.\n",
+      "Go fuck yourself, 2020., This is not happening.\n",
+      "No one man should have all that power., He warned us.\n",
+      "\"Ok thats a quality tweet there Kanye but do you have plans to get on the ballot?\", No?, \"Thats what I thought\"\n",
+      "Make America Cray Again\n",
+      "Yeezy for Preezy\n",
+      "Oh great, lets have 2 rich narcissistic celebrities running for office this time and splitting the vote from the better contender.\n",
+      "He’s just trying to sell an album guys be nice.\n",
+      "It will be so bizarre and surreal if we elected him.\n",
+      "My man said I know you dont like either choice so here I am\n",
+      "\"2020 rang, it says its only half over.\"\n",
+      "now i gotta register to vote 😳\n",
+      "Fucking puke\n",
+      "Not so sure this helps or hurts Trump., Lots of crazies that would have voted Trump will switch to Kanye, but I bet it won’t make much of a difference.\n",
+      "Who gives a shit, stop giving this moron attention\n",
+      "Never thought Trump would win but now we have a racist narcissist in the White House., Again I would never think Kanye could win but if he did we would have a bipolar narcissist in the White House., Wouldn’t be long before we find out he’s also racist but at the other end., End of times is here.\n",
+      "How much has trump/GOPers damaged this country?, This much\n",
+      "The United States of America is a meme\n",
+      "Finally our saviour has arrived\n",
+      "It’s like we haven’t learned anything in the past 4 years with an ignorant, inexperienced celebrity as president of this country\n",
+      "\"While were at it might as well get all the celebrities to run.\", Hey, why not make a TV show on it., Beyonce, kanye, oprah, some annoying asshole like Gilbert Gottfried, and others., Judged by a Wisconsin farmer.\n",
+      "Elon wants Trump to win., \"No matter how much of a philanthropist he makes himself out to be, hes just another rich asshole, and rich assholes prospered under Trump with massive tax cuts and essentially free money from the government.\", \"I cant believe people are so narrow-minded to stan him just because he posts memes and watches PewDiePie.\"\n",
+      "> Still a better candidate than Trump., \"They probably worked up the plan together... if hes running as an independent, any vote for him is a vote taken away from Biden.\"\n",
+      "One hardcore narcissist is as shitty as the next.\n",
+      "deleted\n",
+      "While I’m not black, can any black person tell me how they feel about Biden, specifically after what he said about “if you don’t vote for me you’re not black”?\n",
+      "removed\n",
+      "*Black celebrity who has a massive ego and has been talking about running for President for literally ever runs for president*\\n\\nAh yes, must because a white guy told him to\n",
+      "They want to keep their higher earner and corporate tax cuts\n",
+      "No he didn’t., Kanye 100% wants publicity for his new album so tweets that he is running for president\n",
+      "as well as the young vote., that is my absolute biggest worry.\n",
+      "But won’t it split the narcissist vote and hurt Trump?\n",
+      "I fucking hate the timeline that is 2020.\n",
+      "deleted\n",
+      "Kanye stopped supporting trump 2 years ago\n",
+      "This is like 30 Rock when Jack hires Tracy to dissuade black voters.\n",
+      "Anyone can announce., \"Lets see if he gets on any states ballots.\"\n",
+      "God fucking spare me lol.\n",
+      "In a gambit material is sacrificed for positional advantage., What is the sacrifice here?\n",
+      "\"Hes got a new album dropping...\"\n",
+      "Probably a publicity stunt and we’ll see how far he takes it., If he just wants to get his name in the media for his album he might announce and drop out in a week., Of course he might actually be in it for the long haul which is scarier.\n",
+      "And you’re willing to admit it?, Sad.\n",
+      "Stay off the drugs\n",
+      "The fuck why?, He is just another Trump bootlicker burgeoise mf.\n",
+      "You were never gonna vote anyway., You don’t give a good shit about this country.\n",
+      "deleted\n",
+      ">Literally going to waste my vote\\n\\nFIFY\n",
+      "Me too., Fuck 2020.\n",
+      "Fuck., Goddamn., I wanna expatriate.\n",
+      "The year summed up in a sentence\n",
+      "125,000+ Americans are dead from covid and this fucking idiot thinks this is the perfect time to run a troll campaign that would only help continue this distatorous administration., Fuck 2020\n",
+      "\"If not for everything thats at stake, Id LOVE to see a televised debate between Trump and Kanye.\"\n",
+      "This has to be an attempt to split the vote from Biden, right?, \"The only winner is Bolton, because he has someone to write in that isnt Trump or Biden :(\"\n",
+      "Have you seen his wife?\n",
+      "Thank you., My thoughts exactly\n",
+      "He always sucked.\n",
+      "I miss the old Kanye, straight from the go Kanye\\nChop up the soul Kanye, set on his goals Kanye\n",
+      "\"Yeah thats not saying much tho...\", \"Id take an inanimate carbon rod over Donnie\"\n",
+      "Who cares, he would be an entertaining president\n",
+      "Not likely.\n",
+      "40 year old hipsters listen to Gen-X crap., Kanye is a millennial phenomenon.\n",
+      "It’s designed that way but will probably do the opposite lol\\n\\n50 year black church-goers aren’t voting for Kanye over Biden., Black conservatives who would vote for trump would probably vote for Kanye tho.\n",
+      "Time to saddle up Michelle Obama as Biden VP and get this shit show over with.\n",
+      "This is a vote for Trump.\n",
+      "Both things could be correct., He wants to vote for Trump *and* run to siphon votes and guarantee a Trump victory.\n",
+      "No., He said \"And we know who I\\m voting on\"., \"If you know anything about Kanye West, its pretty clear that he was saying that he plans on voting for Kanye West\"\n",
+      "Wow(https://youtu.be/chCUZo-O0to)\n",
+      "Me thinks you beez right.\n",
+      "Him and Kim publicly said they were only “pro-trump” to get wrongfully prisoned inmates free.\n",
+      "Are we sure it isn’t a joke?\n",
+      "Trump isn’t his boy., He revealed during the George Floyd protests that he was just sucking up to Trump to get people out of prison who shouldn’t be there.\n",
+      "Yep this has \"active measures\" ratfucking written all over it\n",
+      "Why would minority voters simply vote for kanye and other type of voters?\n",
+      "I think(big disclaimer there) Kanye was actually quoted as saying he wore those MAGA hats as a way to gain a friendship with Trump and then used that friendship to free innocent black people who were jailed on wrongful convictions.\n",
+      "Jokes on him, white people like his stuff too.\n",
+      "deleted\n",
+      "Stop liking him., He wants to help Trump because Trump can corruptly help him.\n",
+      "Kanye is a fucking idiot and people should stop paying attention to him.\n",
+      "either way, its a dick move by kanye.\n",
+      "Lmao get out!\n",
+      "\"Kanyes campaign will be my beautiful dark twisted fantasy.\"\n",
+      "\"He likely wont even make the ballot in most states, if any.\", I doubt this will be talked about even into next week.\n",
+      "That requires the media to have learned their lesson from 2016., It will be on all front pages tomorrow.\n",
+      "Of course he is, they hate Democrats more than anyone\n",
+      "The glee I’ve seen erupt on my timeline with this is disgusting., Horseshoe theory is very fucking real\n",
+      "Keep dreaming pal.\n",
+      "Thank God.\n",
+      "But as we learned from Jill Stein last time, all it takes is a few thousand votes in a handful of states.\n",
+      "I feel like people might be dumb enough to do a write in\n",
+      "A nonzero amount of people will still throw their vote away as a write in for Kanye, and some of those people will be in places like Wisconsin and Florida\n",
+      "What makes you say that?, Seems like most states require a few tens of thousands signatures to get on the ballot., Nothing a rich crazy person can’t accomplish\n",
+      "Thanks for your logic during this time., Nobody tell Kanye.\n",
+      "But he is black and he stands for black life, which is not what trump supports.\n",
+      "\"Wait, so who gets the Christian GOP vote?\", The guy talking about being a born again Christian, and putting out an entire album about Jesus, or the white guy?\n",
+      "We know he’s MAGA, so we know his values already.\n",
+      "A vote for Kanye is a vote for suicide\n",
+      "\"It literally isnt.\"\n",
+      "He wants to help Trump.\n",
+      "The chop up his soul Kayne, set on his goals Kayne., I hate the new Kanye....\n",
+      "the Internet Research Agency calling people into work early today, i see\n",
+      "\"Yeah thats a terrible idea.\"\n",
+      "Someone posting in Trump subreddits want to pretend to be walking away from Biden?\n",
+      "\"thats the entire reason hes doing it.\"\n",
+      "slightly is an understatement., Kanye is broken beyond repair.\n",
+      "\"Hes bipolar to the extreme.\"\n",
+      "He said he pretended to like Trump to \"get people out of prison.\"\n",
+      "Everything you said is right., \"But youre approaching the question as if hes serious about winning.\", \"Hes not.\", \"Hes only serious about drawing votes from Biden to help his preferred candidate, who is Trump.\", \"He actually doesnt even need to be on the ballot to do that.\", \"Hell get some write-ins.\", \"Hell also now get a lot of publicity, which he may ultimately use to promote Trump.\"\n",
+      "\"Even so, its really fucking irresponsible.\"\n",
+      "He may end up as a write in candidate., He needs serious money and organizing to get the signatures to end up on the ballot., \"Hes so damn narcissistic that he thinks that he will be taken seriously.\"\n",
+      "Last time I ordered a Vermin Supreme there was barely any rat in it., Very disappointing, Taco Bell.\n",
+      "Ironic considering Joe Biden has said his VP pick will absolutely be a minority.\n",
+      "\"I dont think its serious either.\", \"He cant feasibly build up the organization in the rest of the states.\", He needs tens of thousands of workers., \"Spend an ungodly sum of money that I dont think he has the stomach for.\", \"Its going to come out of his pocket.\", There is no national committee to help him fundraise.\n",
+      "\"Hes mentally ill.\", Which, as a list of reasons to be a Trump supporter, is about the most logical one I can think of.\n",
+      "~163 EC votes are basically already out of play for him., Impossible for him to win.\n",
+      "\"Youve heard the GOP thinks Tucker Carlson is going to run in 2024?\"\n",
+      "How do you figure that?, \"Ive heard about voter registration spikes arising during the protests.\"\n",
+      "There’s definitely going to be more black turn out for Biden than for Trump., One of the reasons Democrats found the Biden nomination so inciting was because more African Americans supported him than any other Democratic candidate running (mostly because he was Obama’s VP)\n",
+      "\"The younger ones of us arent really enthused at all by him.\", Our parents and grandparents adore him\\n\\nAt least my experience., But fr none of my friends or family thats my age likes him at ALL\n",
+      "Lol., Are you saying this as if biden is racist in the face of the most racist nationalist person to ever be elected to office?\n",
+      ">Black voters favor Biden over Trump by an overwhelming margin (89% to 7%)., Per Pew Research polling(https://www.pewresearch.org/politics/2020/06/30/publics-mood-turns-grim-trump-trails-biden-on-most-personal-traits-major-issues/)\n",
+      "Don Jon must not understand Biden was the VP for the first ever African American US president., A very well liked president at that., \"You cannot get a better endorsement than Obama if youre trying to secure the black vote.\", \"Kanye is a musical genius but hes also a complete meme.\", \"The only people who dont understand that are easily impressionable teenagers and poor people who idolize wealthy rappers.\"\n",
+      "I mean, this late in the game, can he even get on the ballot in every state?\n",
+      "Pardon my ignorance; could you tell me what \"HN\" and \"UT\" stand for?\n",
+      "deleted\n",
+      "Kanye’s lost a lot of that goodwill over the past few years., We all want him to get back on his meds and stop being so goddam crazy all the goddam time.\n",
+      "Yeah I feel like only Shaun King is close to being as hated.\n",
+      "What’s UT?\n",
+      "\"I think we tend to underestimate the amount of politically uninformed voters out there (Im talking about everyone here - not black people).\", \"Im Australian, but I know tonnes of people who would vote for someone like Kanye because its funny or a joke, so I wouldnt underestimate the ability of Kanye to take votes away from the Dems.\"\n",
+      "Those acronyms went right over my head\n",
+      "Except Kanye loves Trump, so there would be no reason for him to run in 2020?\n",
+      "He recently stated his support for Trump., https://www.businessinsider.com/kanye-west-signals-hell-vote-for-donald-trump-in-2020-2020-4\n",
+      "\"While Id normally agree with your sentiment Kanye is a huge Trump supporter and this is exactly something Trumps handlers (ie Foreign actors) would suggest Kanye do\"\n",
+      "This guy has like 9 platinum albums in a row., The fact that Elon just endorsed him, fuckery is at foot here.\n",
+      "He said he was going to run in 2016 but I do agree that Kanye is known to say wild things for press right before he drops an album or shoes\n",
+      "Kanye is Kanye., He does not need to pull a stunt like a fake presidential run to hype up his album., He is arguably in the top 5 most famous living artists in the world., \"This isnt Donald Trump circa 2016 were talking about here.\"\n",
+      "Last time someone ran 100% for publicity they ended up president.\n",
+      "deleted\n",
+      "Does he have a new album coming out?, \"Id feel much better about this if it was just another one of his obvious pr stunts before a new album.\", Im worried this is an attempt by the GOP and his buddy trump to pull votes from biden.\n",
+      "I mean Kanye went full MAGA(https://pbs.twimg.com/media/EcICQuVUYAAuW8T?format=jpg&name=small)., \"Seems super transparent that hes just trying to dilute Bidens numbers with black people.\"\n",
+      "We had enough literal dumbasses voting for Harambe in 2016., This is a gigantic loser move by Kanye.\n",
+      "\"This may be the most underhandedly racist comment Ive read on Reddit.\"\n",
+      "\"He can only get on as a write-in candidate, and hed need thousands of signatures in *each state* to even qualify for that.\"\n",
+      "Sanity\n",
+      "At this rate?, Yes.\n",
+      "You stil think voting helps lol., They are all elite rich assholes.\n",
+      "How is this even remotely racist?, ?\n",
+      "Racist???, Wtf??, ?\n",
+      "\"Id rather waste my vote than participate in a system of built on evil.\", Fuck yes, I wont be complacent and give the government my vote., I fucking hate this system and everyone involved.\n",
+      "What?, This is fantastic news., There is zero chance he takes a single vote from Biden.\n",
+      "Looking back fondly now on 2019...\n",
+      "It’s publicity for his album don’t have a aneurism about it\n",
+      "\"Bro if Biden cant win because kanye runs hes not a good choice lol\"\n",
+      "The incoherent vs the incoherent.\n",
+      "Of course it is., \"Theres no chance he wins this late because the democrats wont accept him and hes not replacing trump.\"\n",
+      "Why, is she a greater clown?\n",
+      "Not true\n",
+      "That’s exactly what got us in the shit we’re in right now.\n",
+      "Because it’s not about entertainment you fucking clown., It’s about people lives., Go watch reality TV if you want to be entertained., Leave the politics to the adults.\n",
+      "\"50 year old black voters will remember their families being locked up by Biden so they definitely wont be voting for him\"\n",
+      "\"Yeah... youre right.\", After I responded, I realized Kanye wants to steal votes from Biden and throw the election to Traitor in Chief\n",
+      "Me thinks you is wrong\n",
+      "Bullshit that guy went full MAGA., \"You dont come back from full MAGA\"\n",
+      "Sure, Jan.\n",
+      "\"Perhaps, but at this point I dont care much for giving MAGA hat wearers the benefit of the doubt.\"\n",
+      "\"Ive had my fill of Joke Presidents for this century.\"\n",
+      "\"Its worse if its a joke.\", \"Fuck joke candidates, this country is burning and doesnt have time for bullshit like this.\"\n",
+      "I sure hope so\n",
+      "\"Lol you mean Kanyes MAGA love didnt fit the moment and he pretended to be woke again in order to make money off the protests.\"\n",
+      "\"Whos got what on kanye?\"\n",
+      "Really it’s just young people who might have voted for Biden simply because they don’t like Trump, but will now just write in Kanye’s name., Remember Harambe?\n",
+      "The point is mainly that young people who don’t like Trump who might have Biden, will now just write in Kanye’s name., Thus 4 more years of Donnie\n",
+      "white conservatives are still sticking with trump so its still bad for leftists\n",
+      "I *really* hope this comment doesn’t end up on /r/AgedLikeMilk in a year.\n",
+      "\"For an independent, the deadline in most states isnt until sometime in August and only require a few thousand signatures.\", I think he could easily make the ballot in most states if he really wanted to., https://ballotpedia.org/Ballot_access_for_presidential_candidates\n",
+      "\"Thats becouse they are just as authoritarian as current conservatives, they just havent realized it yet\"\n",
+      "Oh man be sure to tell one of them that, NOTHING pisses them off more than that fact lol.\n",
+      "most states make it especially difficult for independents without major or minor party backing to get ballot access, so this is a publicity stunt and nothing more\n",
+      "removed\n",
+      "And the filing deadline has already passed in many states, with the majority of remaining filing deadlines coming due in the next 2-4 weeks., Kanye would have to collect tens of thousands of signatures in some states to gain ballot access, with less than a month to do it., \"Its a fucking publicity stunt.\"\n",
+      "Actually no., Given that Gary Johnson helped Clinton in at least 4-5 states.\n",
+      "\"And those same people would either vote for Trump, the Libertarians, or fucking Mickey Mouse if they werent voting Kanye, or they just wouldnt vote at all.\", \"Any Black man whod be voting for Kanye wasnt going to be voting for any Democrat anyways.\", \"Hes going to get the fucking NOI Hotep vote and nothing more.\"\n",
+      "\"Dont think those people were voting for Biden anyway if theyre going to come in and vote as a joke.\"\n",
+      "\"You cant buy petition signatures like these guys buy twitter and IG followers\"\n",
+      "\"1) You cant buy petition signatures, or collect them online, its a lengthy in-person process.\", Some of the states you mentioned require tens of thousands of certified signatures, and most require the signatures be from people registered to vote., \"Sorry, I dont see it happening in most states.\", 2) Who the fuck is going to switch votes from Biden to Kanye?, Nobody, he\\s not going to \"take votes\" from anyone except maybe some tiny percentage of Trump-supporting black men.\n",
+      "He does not stand for black lives., He stands to divide black folk and allow white supremacists to win, because white supremacists love it when black folk sing and dance.\n",
+      "\"Hes done more for black lives than any recent president.\", Historic black colleges, opportunity zones, criminal reform, record low unemployment.\n",
+      "White guy, of course.\n",
+      "The white dude lol\n",
+      "Agree\n",
+      "Kanye donated to the democrats last election., Research., He used trump to free innocent black people out of prison\n",
+      "Friends stick together.\n",
+      "How Kanye isn’t a career politician like Biden., Rather have him., Half the people don’t even like Biden, he’s just there and alright., Kanye is special., Can’t stop the youth., Kanye 2020 baby\\n\\n\\n\\nThink about the reasons cuz there’s more than plenty., All abroad the train Kanye 2020., Edit: lots of boomers on here lol., Kanye 2020\n",
+      "I was with trump before over Biden., But all my friends are Biden fans before Kanye ran., But this is something we all came together upon., Kanye 2020, love on both sides., Just as he announced it it’s something that everybody can support and re-unite both sides of the political spectrum\n",
+      "Fuck him.\n",
+      "Well I’m not medically trained to make that diagnosis but I’ll take it onboard., I wonder what random character will run next for the land of the free., I really hope you guys vote in Kermit the frog., ☕️\n",
+      "A shame., Bipolar is a very difficult illness to live with on the best of days.\n",
+      "He says a lot of shit.\n",
+      "but that stream of consciousness rant in the oval...that was some next level cray.\n",
+      "He didn’t act like he was pretending when he gave a full interview detailing his struggles as a Trump supporter., https://youtu.be/rzXpJcwqYIg\\n\\nThe final minute is the best part.\n",
+      "\"I hear what youre saying, and I agree that he would not necessarily be trying to win.\", \"However, write-in campaigns are pretty much useless, so as long as he isnt on ballots, any damage he could do would be very limited.\", \"Its a bigger deal if hes serious about getting on the ballot and the GOP tries to help him to ratfuck the Democrats.\"\n",
+      "\"Hes a billionaire...\"\n",
+      "....and every fucking one of the women mentioned is accomplished and qualified., \"Whats ironic is that your attempt at making a point that you obviously perceive as clever clearly outs you as one of the people who needs to check themselves.\"\n",
+      "\"From what Ive been told, and please correct me if Im wrong, its from older members of the black community who have secured a comfortable lifestyle for themselves and have essentially been integrated into the status quo.\"\n",
+      "I’m not, but it isn’t like Biden is very not racist either\n",
+      "\"Why are Trump voters seemingly surprised by this when  DJTs father racially profiled tenants?\"\n",
+      "Mhmm you underestimate the American populace., \"If he campaigns in inner cities and brings up Bidens Crime Bill and stance on segregation, he can do some damage.\"\n",
+      "“He’s a jackass,” - President Barack Obama 2009\n",
+      "To be fair, Trump understands very little about black voters., They’re not his base.\n",
+      "I mean, a complete meme doesnt hurt a run for prez nowadays\n",
+      "\"Hes an incomplete meme.\"\n",
+      "Most of the larger ones he could but it would cost $20-30 a signature at this point.\n",
+      "Unfortunately I think so., The filing deadline for independent candidates is later than for other candidates\\n\\nhttps://ballotpedia.org/Deadline_to_run_for_president#Independent_candidates\n",
+      "Uncle and house, hth\n",
+      "what does a german know about the \"diversity\" of the black community in america?, pray tell\\n\\ni quoted diversity because you\\re obviously using it in bad faith for \"both sides\" or w/e you want to bullshit about\n",
+      "stop trying to control kanye\n",
+      "Why’d you jump immediately to a white guy told him to run?\n",
+      "Kanye hasn’t loved Trump in a while., Latest song he released isn’t very pro-Trump., I don’t think it’s a Trump ploy, it’s more likely that this is an ego thing.\n",
+      "but he doesn’t really...at least I don’t *think* so at this point...\n",
+      "Well I’m obviously gonna push back on the idea that Kanye wouldn’t do this himself for his own attention and ego lol because anyone who knows ye knows exactly why he did this shit., If all you knew about him was his pro Trump shit and nothing else you’d have this opinion\n",
+      "Elon is always joking around on twitter., Kanye is always saying something or doing something outrageous before an album drop., It really isn’t that deep yet it’s got people losing their shit and acting like black people will just vote for whoever is the same skin colour as them and not look at the candidates first.\n",
+      "He cares about attention more than anything., I don\\t doubt he may also want to help Trump get elected though, especially after Elon\\s \"take the red pill\" nonsense., Such a shame this is even a conversation.\n",
+      "He always does a bunch of extra shit lol, that’s Kanye., He technically doesn’t need to do anything to get a shitload of attention., He does it cos he’s kanye\n",
+      "Kanye always says something crazy to get publicity before an album drop., You don’t seem to know him very well for someone who claims “Kanye is Kanye”\n",
+      "It’s completely different., 1., If he was actually running it would be different from trump as he wouldn’t be under any of the two big parties., 2., He isn’t actually running and the tweet is to gain media attention before his album drop.\n",
+      "\"Trump ran for a major partys nomination.\", \"Dont be obtuse.\"\n",
+      "It’s completely different., 1., \\u2060If he was actually running it would be different from trump as he wouldn’t be under any of the two big parties., 2., \\u2060He isn’t actually running and the tweet is to gain media attention before his album drop.\n",
+      "Yeah he does., I wouldn’t worry he isn’t going to end up running., I don’t think he is that friendly with trump anymore if you listen to his latest sing it’s not something trump would like.\n",
+      "Do you want to make a bet on Kanye not actually running for president?\n",
+      "Yes., I do., It’s all we got.\n",
+      "/s\n",
+      "What a fucking trainwreck\n",
+      "There is zero chance he runs it’s publicity for his new album he does this every time and to be honest why wouldn’t he cause dummys like you always make it work.\n",
+      "Kanye like many black folk is more socially conservative than Biden.\n",
+      "\"Sorry if I dont think that the 2020 presidential election is a fucking joke that some musician can troll as a way to sell albums.\", Getting Trump out of office is way too important for bullshit like this.\n",
+      "\"Shes a hobbit.\"\n",
+      "Yes.\n",
+      "With all she puts in., Yes.\n",
+      "I’m 18 so I am an adult, and all my friends and college kids will be voting for him., Kanye2020\n",
+      "\"Me hopes he is just another clown looking for the spotlight that has moved from his face to his wifes ass.\", \"But thats just me.\"\n",
+      "No he didn’t\n",
+      "Is it so hard to believe that a celebrity who’s not a professional wrestler could be involved in Kayfabe?, Kanye is playing a character., If you don’t believe me watch some of his more smaller scale interviews., He’s competent and perceptive as hell.\n",
+      "\"Lol and wasnt he tens of millions of dollars in debt as recently as last year?\", The mind boggles thats for sure\n",
+      "\"Hes mentally ill. No kompromat required.\"\n",
+      "deleted\n",
+      "Yes thats terrifying., I’m not American so all I can do is be sad that innocent people are going to die before things get better there., But also be hopeful because things will inevitably get better there., Forests grow back healthier, and more lush after a fire; America will see a growth in humanity once the fires burn out.\n",
+      "Good news is that in reality the amount of people who are like DSA twitter is few and far between\n",
+      "So was trumps candidacy, look where that got us.\n",
+      "We all thought Trump was a publicly stunt.\n",
+      "That seems nice and democratic\n",
+      "\"Well now thats not true at all.\"\n",
+      "\"It looks like theres only 6 states(https://ballotpedia.org/Deadline_to_run_for_president) for which the deadline has already passed.\"\n",
+      "WOW wait i did not know that., So does that mean he is a traitor of all the black people., Why are people still buying his songs THEN!!, !\n",
+      "he literally just sent goerge floyds daughter to college and marched out on the streets., he appointed a black woman as the design director of his new clothing brand., he talks about limiting black on black crime all the time., stop trying to paint kanye as someone who doesnt care for black people\n",
+      ">record low unemployment., LMAO do you know how high unemployment is now?, Did you just come out of a time capsule?\n",
+      "But other guys just suggested he does not stand for black lives., so why would he do these great things as you said., If he wanted to divide black people and allow white supremacists to win, why would in any circumstance Kanye will do these good deeds as you suggested.\n",
+      "Just spouting the worst fucking takes today.\n",
+      "\"Weve seen what not having a career politician in the oval office has been like.\", I want some normalcy.\n",
+      "\"ah yes, career politicians shouldnt be president, which is why when i go in for surgery i insist the procedure be done by the janitor and the front desk receptionist\\n\\nfuck off\"\n",
+      "Quite a few people like Biden actually., \"And weve seen during this pandemic why politics is a career -- Trump has been about as impotent a leader as one can be, and it is clear that his inexperience is preventing his administration from being at all effective.\"\n",
+      "\"A publicity stunt isnt going to reunite anything.\"\n",
+      "BABY YODA/BOB ROSS PAINTING 2024\n",
+      "Like saying he is running for President.\n",
+      "Or here me out... he’s dropping a new album soon and he wants it to get major attention.\n",
+      "I really don’t want to entertain the idea of Kanye running, but if he did run a write-in campaign, he only needs to take away votes in a few select states to dramatically shift the race to Trump., A few points away from Biden can cost him the election.\n",
+      "Yes but how much is cash or easily liquidated?, Ross Perot spent insane amounts of money in his bid for the presidency., \"Its not easy to run a campaign.\", You need people, offices a whole organization., Kanye already shot himself in the foot by wearing a MAGA hat in that meeting with Trump., If he is serious I would imagine we get blitzed with ads showing that photo over and over., This is Kanye hyping his stupid album.\n",
+      "\"Thats comical considering Joe didnt lead with his intent to pick a qualified VP.\", Instead he opted to virtue signal and sate the base by stating that his VP would in fact be a minority., which seems to me it would be Joe Biden that needs to check himself based on your standard.\n",
+      "\"You think hes giving super eloquent and convincing stump speeches to the populations that actually vote?\", Black people overwhelmingly supported Biden in the primaries despite both of those things being beaten to death., No reason to believe that will change., \"Older black people are also the biggest bloc of support and those who actually vote; its fairly obvious they wont be switching their vote from Biden.\"\n",
+      "What a hell of a mixed message that would be though., Wanted segregation and endorsed a crime bill, but now running on a platform to reform the police and served directly under the first black US President., There has to be something more damning than antiquated bills and stances if Kanye wants to do some damage.\n",
+      "Your answer made even less sense\n",
+      "\"Its public knowledge that Kanye visited the White House to meet with Trump and their meeting was amicable.\", \"Thats not the only time theyve met.\", Not as simple as \"a white guy told him to do it\" like you\\re insinuating., It would definitely support Trump to have Kanye enter the race, as unlikely as it would be.\n",
+      "A poster above you linked to this article probably while you were typing., Kinda looks like he still does\\n\\n\\nhttps://www.businessinsider.com/kanye-west-signals-hell-vote-for-donald-trump-in-2020-2020-4\n",
+      "My real feelings is he’s just fucking crazy., Off his meds and crazy., He won’t be on many if any states ballots, it’s so late in the game., Side note: I’m done with Elon Musk too, he’s just as fucking crazy as Kanye.\n",
+      "What?, What did you call me?\n",
+      "\"No, I wasnt saying you are for sure wrong.\", They both are plausible explanations, and very few outside Yeezy and his team know his true motivation.\n",
+      "\"Nobody with two brain cells to rub together is wasting their vote on a write-in candidate, which is what hed be if he can even get enough signatures.\"\n",
+      "He won’t end up running after his album drops this tweet will be forgotten about., Your going to end up disappointed when electing Joe fucking Biden doesn’t magically save the world.\n",
+      "Jelly monster\n",
+      "You are 18... big shocker., When I was 18 I voted for Bush Jr. I’ve since pulled my head out of my ass, I hope the same for you and your friends.\n",
+      "So you are voting to keep trump in the WH then., Kanye has 0% chance of winning, all he is doing is pulling votes from Biden to help trump\\n\\nYou voting as you want to is equal to a vote for trump\\n\\nThat makes you a trump supporter\n",
+      "All of you are wrong., Its part of the album rollout\n",
+      "\"Trump ran for a major partys nomination.\", \"Dont be obtuse.\"\n",
+      "\"Trump ran for a major partys nomination.\", \"Dont be obtuse.\"\n",
+      "How is it undemocratic to have someone collect a petition of voter signatures to run for office?, Isn\\t that \"democratic\" by definition?\n",
+      "Say Kanye 2020 to prove you arent racist then\n",
+      "And 37 states have their filing deadline in July or August.\n",
+      "\"I dont know about traitor.\", If a white man could do such harm to black people, he would be wrong to do it despite not being black., So the word traitor does not apply., He would be using his popularity to take away votes for a serious candidacy, of which there is only one in 2020.\n",
+      ">Why are people still buying his songs THEN!!!, Because Kanye makes decent music but Kanye does not make a decent human.\n",
+      "\"Its just 18 year olds who wont be affected by another Trump term\"\n",
+      "Nasopharyngeal Swab for Senate 2022\n",
+      "\"Im just looking at what possible impact he could have if was serious.\", \"For the record, I dont think he is at all.\"\n",
+      "Trump won by 77,000 votes in 3 states., Margins matter., Even if he chops off 1-2% that can help him win the electoral college., Also, if he runs a M4A & free college platform he can get progressives., And yes black people do vote for black people., I knew people that voted for Obama in 2008 because he was black., I also knew people that voted for Hillary just because they wanted to see the 1st woman President.\n",
+      "For a God of New York, you’re fucking sheltered if you can’t work out what it means.\n",
+      "\"The poster meant house n-word and uncle t*m\\n\\nI didnt say the words because im not sure if id get caught in a auto-ban filter.\"\n",
+      "\"Theyre racial slurs\"\n",
+      "\"maybe its true.\", \"maybe its not.\", \"I treat Kanyes mind as a case-to-case situation, because his mind can change a lot.\", &#x200B;\\n\\n https://www.okayplayer.com/music/kanye-west-make-america-great-again-hat-glc-the-red-pill-podcast-with-van-lathan.html(https://www.okayplayer.com/music/kanye-west-make-america-great-again-hat-glc-the-red-pill-podcast-with-van-lathan.html)\n",
+      "He won’t even run once his album drops it will be forgotten that he tweeted this\n",
+      "lol imagine labeling every person as crazy for their differing views, especially when they;re ultra successful., youre the crazy one bro\n",
+      "I don’t think he even knows his true motivations tbh\n",
+      "You know people said the exact same shit about Trump right?, Fuck joke candidates, the times are too serious for this.\n",
+      "Why is it always people in higher/upper class that write in throwaway candidates?\n",
+      "Absolutely not.\n",
+      "I hope you are right man.\n",
+      "You know Kanye isn’t going to be under any of the big two parties if he does run (which he isn’t) so it would be completely different to Trump., Are the times that serious?, I for one can’t wait for Trump to lose just for nothing to change expect maybe the reddit news page isn’t filled with stuff about trump.\n",
+      "I will be\n"
+     ]
+    }
+   ],
+   "source": [
+    "%%bash \n",
+    "# ls\n",
+    "cat RedditText.txt"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 7,
+   "metadata": {
+    "colab": {
+     "base_uri": "https://localhost:8080/",
+     "height": 52
+    },
+    "colab_type": "code",
+    "id": "IMnymRDLe0hi",
+    "outputId": "4d26476f-e6b5-475a-a0c1-41b6fcdc041a"
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "CPU times: user 2.74 s, sys: 524 ms, total: 3.27 s\n",
+      "Wall time: 153 ms\n"
+     ]
+    }
+   ],
+   "source": [
+    "%%time \n",
+    "from pathlib import Path\n",
+    "\n",
+    "from tokenizers import ByteLevelBPETokenizer\n",
+    "\n",
+    "paths = [str(x) for x in Path(\".\").glob(\"**/*.txt\")]\n",
+    "\n",
+    "# Initialize a tokenizer\n",
+    "tokenizer = ByteLevelBPETokenizer()\n",
+    "\n",
+    "# Customize training\n",
+    "tokenizer.train(files=paths, vocab_size=52_000, min_frequency=2, special_tokens=[\n",
+    "    \"<s>\",\n",
+    "    \"<pad>\",\n",
+    "    \"</s>\",\n",
+    "    \"<unk>\",\n",
+    "    \"<mask>\",\n",
+    "])"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "colab_type": "text",
+    "id": "6Ei7bqpRf1LH"
+   },
+   "source": [
+    "Now let's save files to disk"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 8,
+   "metadata": {
+    "colab": {
+     "base_uri": "https://localhost:8080/",
+     "height": 34
+    },
+    "colab_type": "code",
+    "id": "EIS-irI0f32P",
+    "outputId": "e86c4a24-eb65-4f0a-aa58-ed1931a05ac9"
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "['RedditText/vocab.json', 'RedditText/merges.txt']"
+      ]
+     },
+     "execution_count": 8,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "!rm -rf RedditText\n",
+    "!mkdir RedditText\n",
+    "tokenizer.save_model(\"RedditText\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "colab_type": "text",
+    "id": "lOOfYSuQhSqT"
+   },
+   "source": [
+    "🔥🔥 Wow, that was fast! ⚡️🔥\n",
+    "\n",
+    "We now have both a `vocab.json`, which is a list of the most frequent tokens ranked by frequency, and a `merges.txt` list of merges.\n",
+    "\n",
+    "Here’s  how you can use it in `tokenizers`, including handling the RoBERTa special tokens – of course, you’ll also be able to use it directly from `transformers`.\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 9,
+   "metadata": {
+    "colab": {},
+    "colab_type": "code",
+    "id": "tKVWB8WShT-z"
+   },
+   "outputs": [],
+   "source": [
+    "from tokenizers.implementations import ByteLevelBPETokenizer\n",
+    "from tokenizers.processors import BertProcessing\n",
+    "\n",
+    "\n",
+    "tokenizer = ByteLevelBPETokenizer(\n",
+    "    \"./RedditText/vocab.json\",\n",
+    "    \"./RedditText/merges.txt\",\n",
+    ")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 10,
+   "metadata": {
+    "colab": {},
+    "colab_type": "code",
+    "id": "hO5M3vrAhcuj"
+   },
+   "outputs": [],
+   "source": [
+    "tokenizer._tokenizer.post_processor = BertProcessing(\n",
+    "    (\"</s>\", tokenizer.token_to_id(\"</s>\")),\n",
+    "    (\"<s>\", tokenizer.token_to_id(\"<s>\")),\n",
+    ")\n",
+    "tokenizer.enable_truncation(max_length=512)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "colab_type": "text",
+    "id": "WQpUC_CDhnWW"
+   },
+   "source": [
+    "## 3. Train a language model from scratch\n",
+    "\n",
+    "**Update:** This section follows along the [`run_language_modeling.py`](https://github.com/huggingface/transformers/blob/master/examples/language-modeling/run_language_modeling.py) script, using our new [`Trainer`](https://github.com/huggingface/transformers/blob/master/src/transformers/trainer.py) directly. Feel free to pick the approach you like best.\n",
+    "\n",
+    "> We’ll train a RoBERTa-like model, which is a BERT-like with a couple of changes (check the [documentation](https://huggingface.co/transformers/model_doc/roberta.html) for more details).\n",
+    "\n",
+    "As the model is BERT-like, we’ll train it on a task of *Masked language modeling*, i.e. the predict how to fill arbitrary tokens that we randomly mask in the dataset. This is taken care of by the example script.\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 11,
+   "metadata": {
+    "colab": {
+     "base_uri": "https://localhost:8080/",
+     "height": 318
+    },
+    "colab_type": "code",
+    "id": "kD140sFjh0LQ",
+    "outputId": "0bab1f9e-bf7a-4f13-82d3-07fe5866ce78"
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Sat Aug  1 20:38:03 2020       \r\n",
+      "+-----------------------------------------------------------------------------+\r\n",
+      "| NVIDIA-SMI 440.33.01    Driver Version: 440.33.01    CUDA Version: 10.2     |\r\n",
+      "|-------------------------------+----------------------+----------------------+\r\n",
+      "| GPU  Name        Persistence-M| Bus-Id        Disp.A | Volatile Uncorr. ECC |\r\n",
+      "| Fan  Temp  Perf  Pwr:Usage/Cap|         Memory-Usage | GPU-Util  Compute M. |\r\n",
+      "|===============================+======================+======================|\r\n",
+      "|   0  Tesla K80           Off  | 00000000:06:00.0 Off |                    0 |\r\n",
+      "| N/A   68C    P0    60W / 149W |      0MiB / 11441MiB |      0%      Default |\r\n",
+      "+-------------------------------+----------------------+----------------------+\r\n",
+      "|   1  Tesla K80           Off  | 00000000:07:00.0 Off |                    0 |\r\n",
+      "| N/A   48C    P0    73W / 149W |      0MiB / 11441MiB |     99%      Default |\r\n",
+      "+-------------------------------+----------------------+----------------------+\r\n",
+      "                                                                               \r\n",
+      "+-----------------------------------------------------------------------------+\r\n",
+      "| Processes:                                                       GPU Memory |\r\n",
+      "|  GPU       PID   Type   Process name                             Usage      |\r\n",
+      "|=============================================================================|\r\n",
+      "|  No running processes found                                                 |\r\n",
+      "+-----------------------------------------------------------------------------+\r\n"
+     ]
+    }
+   ],
+   "source": [
+    "# Check that we have a GPU\n",
+    "!nvidia-smi"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 12,
+   "metadata": {
+    "colab": {
+     "base_uri": "https://localhost:8080/",
+     "height": 34
+    },
+    "colab_type": "code",
+    "id": "VNZZs-r6iKAV",
+    "outputId": "c8404d6c-7662-4240-c8da-ee89edfaf51b"
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "True"
+      ]
+     },
+     "execution_count": 12,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "# Check that PyTorch sees it\n",
+    "import torch\n",
+    "torch.cuda.is_available()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "colab_type": "text",
+    "id": "u0qQzgrBi1OX"
+   },
+   "source": [
+    "### We'll define the following config for the model"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 13,
+   "metadata": {
+    "colab": {},
+    "colab_type": "code",
+    "id": "LTXXutqeDzPi"
+   },
+   "outputs": [],
+   "source": [
+    "from transformers import RobertaConfig\n",
+    "\n",
+    "config = RobertaConfig(\n",
+    "    vocab_size=52_000,\n",
+    "    max_position_embeddings=514,\n",
+    "    num_attention_heads=12,\n",
+    "    num_hidden_layers=6,\n",
+    "    type_vocab_size=1,\n",
+    ")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "colab_type": "text",
+    "id": "yAwQ82JiE5pi"
+   },
+   "source": [
+    "Now let's re-create our tokenizer in transformers"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 14,
+   "metadata": {
+    "colab": {},
+    "colab_type": "code",
+    "id": "4keFBUjQFOD1"
+   },
+   "outputs": [],
+   "source": [
+    "from transformers import RobertaTokenizerFast\n",
+    "\n",
+    "tokenizer = RobertaTokenizerFast.from_pretrained(\"./RedditText\", max_len=512)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "colab_type": "text",
+    "id": "6yNCw-3hFv9h"
+   },
+   "source": [
+    "Finally let's initialize our model.\n",
+    "\n",
+    "**Important:**\n",
+    "\n",
+    "As we are training from scratch, we only initialize from a config, not from an existing pretrained model or checkpoint."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 15,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "from transformers import RobertaForMaskedLM\n",
+    "\n",
+    "model = RobertaForMaskedLM(config=config)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 16,
+   "metadata": {
+    "colab": {
+     "base_uri": "https://localhost:8080/",
+     "height": 34
+    },
+    "colab_type": "code",
+    "id": "jU6JhBSTKiaM",
+    "outputId": "35879a60-2915-4894-f702-2d649cfa398a"
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "84095008"
+      ]
+     },
+     "execution_count": 16,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "model.num_parameters()\n",
+    "# => 84 million parameters"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "colab_type": "text",
+    "id": "jBtUHRMliOLM"
+   },
+   "source": [
+    "### Now let's build our training Dataset\n",
+    "\n",
+    "We'll build our dataset by applying our tokenizer to our text file.\n",
+    "\n",
+    "Here, as we only have one text file, we don't even need to customize our `Dataset`. We'll just use the `LineByLineDataset` out-of-the-box."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 23,
+   "metadata": {
+    "colab": {
+     "base_uri": "https://localhost:8080/",
+     "height": 52
+    },
+    "colab_type": "code",
+    "id": "GlvP_A-THEEl",
+    "outputId": "e0510a33-7937-4a04-fa1c-d4e20b758bb2"
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "CPU times: user 191 ms, sys: 64 ms, total: 255 ms\n",
+      "Wall time: 18.8 ms\n"
+     ]
+    }
+   ],
+   "source": [
+    "%%time\n",
+    "from transformers import LineByLineTextDataset\n",
+    "\n",
+    "dataset = LineByLineTextDataset(\n",
+    "    tokenizer=tokenizer,\n",
+    "    file_path=\"RedditText.txt\",\n",
+    "    block_size=64,\n",
+    ")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "colab_type": "text",
+    "id": "hDLs73HcIHk5"
+   },
+   "source": [
+    "Like in the [`run_language_modeling.py`](https://github.com/huggingface/transformers/blob/master/examples/language-modeling/run_language_modeling.py) script, we need to define a data_collator.\n",
+    "\n",
+    "This is just a small helper that will help us batch different samples of the dataset together into an object that PyTorch knows how to perform backprop on."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 24,
+   "metadata": {
+    "colab": {},
+    "colab_type": "code",
+    "id": "zTgWPa9Dipk2"
+   },
+   "outputs": [],
+   "source": [
+    "from transformers import DataCollatorForLanguageModeling\n",
+    "\n",
+    "data_collator = DataCollatorForLanguageModeling(\n",
+    "    tokenizer=tokenizer, mlm=True, mlm_probability=0.15\n",
+    ")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "colab_type": "text",
+    "id": "ri2BIQKqjfHm"
+   },
+   "source": [
+    "### Finally, we are all set to initialize our Trainer"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 46,
+   "metadata": {
+    "colab": {},
+    "colab_type": "code",
+    "id": "YpvnFFmZJD-N"
+   },
+   "outputs": [],
+   "source": [
+    "from transformers import Trainer, TrainingArguments\n",
+    "\n",
+    "training_args = TrainingArguments(\n",
+    "    output_dir=\"./EsperBERTo\",\n",
+    "    overwrite_output_dir=True,\n",
+    "    num_train_epochs=20,\n",
+    "    per_gpu_train_batch_size=64,\n",
+    "    save_steps=10_000,\n",
+    "    save_total_limit=2,\n",
+    ")\n",
+    "\n",
+    "trainer = Trainer(\n",
+    "    model=model,\n",
+    "    args=training_args,\n",
+    "    data_collator=data_collator,\n",
+    "    train_dataset=dataset,\n",
+    "    prediction_loss_only=True,\n",
+    ")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "colab_type": "text",
+    "id": "o6sASa36Nf-N"
+   },
+   "source": [
+    "### Start training"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 47,
+   "metadata": {
+    "colab": {
+     "base_uri": "https://localhost:8080/",
+     "height": 738,
+     "referenced_widgets": [
+      "a58a66392b644b1384661e850c077a6c",
+      "a491e8caa0a048beb3b5259f14eb233f",
+      "837c9ddc3d594e088891874560c646b8",
+      "dbf50873d62c4ba39321faefbed0cca5",
+      "40bf955ba0284e84b198da6be8654219",
+      "fe20a8dae6e84628b5076d02183090f5",
+      "93b3f9eae3cb4e3e859cf456e3547c6d",
+      "6feb10aeb43147e6aba028d065947ae8",
+      "0989d41a4da24e9ebff377e02127642c",
+      "42c6061ef7e44f179db5a6e3551c0f17",
+      "d295dd80550447d88da0f04ce36a22ff",
+      "04e7e6d291da49d5816dc98a2904e95c",
+      "e7d8c3a4fecd40778e32966b29ea65a1",
+      "016d7c8318f742c1943464b08232a510",
+      "8388e9da9da4492c98c19235ca5fc1b5",
+      "39c23c6a972b419eb2eeeebafeaedc22"
+     ]
+    },
+    "colab_type": "code",
+    "id": "VmaHZXzmkNtJ",
+    "outputId": "a19880cb-bcc6-4885-bf24-c2c6d0f56d1e"
+   },
+   "outputs": [
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "Using deprecated `--per_gpu_train_batch_size` argument which will be removed in a future version. Using `--per_device_train_batch_size` is preferred.\n",
+      "Using deprecated `--per_gpu_train_batch_size` argument which will be removed in a future version. Using `--per_device_train_batch_size` is preferred.\n"
+     ]
+    },
+    {
+     "data": {
+      "application/vnd.jupyter.widget-view+json": {
+       "model_id": "698ea25272574ae1bfd583a475d3ac81",
+       "version_major": 2,
+       "version_minor": 0
+      },
+      "text/plain": [
+       "HBox(children=(FloatProgress(value=0.0, description='Epoch', max=20.0, style=ProgressStyle(description_width='…"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    },
+    {
+     "data": {
+      "application/vnd.jupyter.widget-view+json": {
+       "model_id": "52227c1b384b4195bca24a7a3a3684c2",
+       "version_major": 2,
+       "version_minor": 0
+      },
+      "text/plain": [
+       "HBox(children=(FloatProgress(value=0.0, description='Iteration', max=4.0, style=ProgressStyle(description_widt…"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    },
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "/home/taylor/anaconda3/lib/python3.7/site-packages/torch/nn/parallel/_functions.py:61: UserWarning: Was asked to gather along dimension 0, but all input tensors were scalars; will instead unsqueeze and return a vector.\n",
+      "  warnings.warn('Was asked to gather along dimension 0, but all '\n"
+     ]
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "\n"
+     ]
+    },
+    {
+     "data": {
+      "application/vnd.jupyter.widget-view+json": {
+       "model_id": "789405f1e43d416eb83cb97130bf9eaf",
+       "version_major": 2,
+       "version_minor": 0
+      },
+      "text/plain": [
+       "HBox(children=(FloatProgress(value=0.0, description='Iteration', max=4.0, style=ProgressStyle(description_widt…"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "\n"
+     ]
+    },
+    {
+     "data": {
+      "application/vnd.jupyter.widget-view+json": {
+       "model_id": "276c4f75336548688bde5754ab63a8ba",
+       "version_major": 2,
+       "version_minor": 0
+      },
+      "text/plain": [
+       "HBox(children=(FloatProgress(value=0.0, description='Iteration', max=4.0, style=ProgressStyle(description_widt…"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "\n"
+     ]
+    },
+    {
+     "data": {
+      "application/vnd.jupyter.widget-view+json": {
+       "model_id": "2a410367a161427ea360fa4cf3f79e3c",
+       "version_major": 2,
+       "version_minor": 0
+      },
+      "text/plain": [
+       "HBox(children=(FloatProgress(value=0.0, description='Iteration', max=4.0, style=ProgressStyle(description_widt…"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "\n"
+     ]
+    },
+    {
+     "data": {
+      "application/vnd.jupyter.widget-view+json": {
+       "model_id": "641b06c5344743eaaae69abb6323d564",
+       "version_major": 2,
+       "version_minor": 0
+      },
+      "text/plain": [
+       "HBox(children=(FloatProgress(value=0.0, description='Iteration', max=4.0, style=ProgressStyle(description_widt…"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "\n"
+     ]
+    },
+    {
+     "data": {
+      "application/vnd.jupyter.widget-view+json": {
+       "model_id": "70c1d0bfdb214a94b7a04146b8dbcf30",
+       "version_major": 2,
+       "version_minor": 0
+      },
+      "text/plain": [
+       "HBox(children=(FloatProgress(value=0.0, description='Iteration', max=4.0, style=ProgressStyle(description_widt…"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "\n"
+     ]
+    },
+    {
+     "data": {
+      "application/vnd.jupyter.widget-view+json": {
+       "model_id": "d80d5ff207324a56b53858c0d94d5f84",
+       "version_major": 2,
+       "version_minor": 0
+      },
+      "text/plain": [
+       "HBox(children=(FloatProgress(value=0.0, description='Iteration', max=4.0, style=ProgressStyle(description_widt…"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "\n"
+     ]
+    },
+    {
+     "data": {
+      "application/vnd.jupyter.widget-view+json": {
+       "model_id": "ee4210a4710742ce87b76da3930c508d",
+       "version_major": 2,
+       "version_minor": 0
+      },
+      "text/plain": [
+       "HBox(children=(FloatProgress(value=0.0, description='Iteration', max=4.0, style=ProgressStyle(description_widt…"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "\n"
+     ]
+    },
+    {
+     "data": {
+      "application/vnd.jupyter.widget-view+json": {
+       "model_id": "5731595437ed4ce6a0479fea665c7ad2",
+       "version_major": 2,
+       "version_minor": 0
+      },
+      "text/plain": [
+       "HBox(children=(FloatProgress(value=0.0, description='Iteration', max=4.0, style=ProgressStyle(description_widt…"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "\n"
+     ]
+    },
+    {
+     "data": {
+      "application/vnd.jupyter.widget-view+json": {
+       "model_id": "e6bf68c3edf348538bc65909668f9969",
+       "version_major": 2,
+       "version_minor": 0
+      },
+      "text/plain": [
+       "HBox(children=(FloatProgress(value=0.0, description='Iteration', max=4.0, style=ProgressStyle(description_widt…"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "\n"
+     ]
+    },
+    {
+     "data": {
+      "application/vnd.jupyter.widget-view+json": {
+       "model_id": "6f3cc30b6f56422ca0f7a1bedd1ea0f1",
+       "version_major": 2,
+       "version_minor": 0
+      },
+      "text/plain": [
+       "HBox(children=(FloatProgress(value=0.0, description='Iteration', max=4.0, style=ProgressStyle(description_widt…"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "\n"
+     ]
+    },
+    {
+     "data": {
+      "application/vnd.jupyter.widget-view+json": {
+       "model_id": "d054de67a0ca47bdbf2900856c173321",
+       "version_major": 2,
+       "version_minor": 0
+      },
+      "text/plain": [
+       "HBox(children=(FloatProgress(value=0.0, description='Iteration', max=4.0, style=ProgressStyle(description_widt…"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "\n"
+     ]
+    },
+    {
+     "data": {
+      "application/vnd.jupyter.widget-view+json": {
+       "model_id": "11872fe654574388a3d777865cceef96",
+       "version_major": 2,
+       "version_minor": 0
+      },
+      "text/plain": [
+       "HBox(children=(FloatProgress(value=0.0, description='Iteration', max=4.0, style=ProgressStyle(description_widt…"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "\n"
+     ]
+    },
+    {
+     "data": {
+      "application/vnd.jupyter.widget-view+json": {
+       "model_id": "2f384bdd747d42978d01e8f0e4fce6ef",
+       "version_major": 2,
+       "version_minor": 0
+      },
+      "text/plain": [
+       "HBox(children=(FloatProgress(value=0.0, description='Iteration', max=4.0, style=ProgressStyle(description_widt…"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "\n"
+     ]
+    },
+    {
+     "data": {
+      "application/vnd.jupyter.widget-view+json": {
+       "model_id": "3e7dabb339af4c62b6b351bfb42406fa",
+       "version_major": 2,
+       "version_minor": 0
+      },
+      "text/plain": [
+       "HBox(children=(FloatProgress(value=0.0, description='Iteration', max=4.0, style=ProgressStyle(description_widt…"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "\n"
+     ]
+    },
+    {
+     "data": {
+      "application/vnd.jupyter.widget-view+json": {
+       "model_id": "2574cb63d7b14cf19674661567d1dd1e",
+       "version_major": 2,
+       "version_minor": 0
+      },
+      "text/plain": [
+       "HBox(children=(FloatProgress(value=0.0, description='Iteration', max=4.0, style=ProgressStyle(description_widt…"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "\n"
+     ]
+    },
+    {
+     "data": {
+      "application/vnd.jupyter.widget-view+json": {
+       "model_id": "83be8b063b5548b0bace0989d8bc71f5",
+       "version_major": 2,
+       "version_minor": 0
+      },
+      "text/plain": [
+       "HBox(children=(FloatProgress(value=0.0, description='Iteration', max=4.0, style=ProgressStyle(description_widt…"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "\n"
+     ]
+    },
+    {
+     "data": {
+      "application/vnd.jupyter.widget-view+json": {
+       "model_id": "47f6f016fab2451cb6cf8c4de9ef55c2",
+       "version_major": 2,
+       "version_minor": 0
+      },
+      "text/plain": [
+       "HBox(children=(FloatProgress(value=0.0, description='Iteration', max=4.0, style=ProgressStyle(description_widt…"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "\n"
+     ]
+    },
+    {
+     "data": {
+      "application/vnd.jupyter.widget-view+json": {
+       "model_id": "bdd8fe20569946e9bb9c2ac0fbff310a",
+       "version_major": 2,
+       "version_minor": 0
+      },
+      "text/plain": [
+       "HBox(children=(FloatProgress(value=0.0, description='Iteration', max=4.0, style=ProgressStyle(description_widt…"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "\n"
+     ]
+    },
+    {
+     "data": {
+      "application/vnd.jupyter.widget-view+json": {
+       "model_id": "2b8ae9144072422c81b447eb2a135a0f",
+       "version_major": 2,
+       "version_minor": 0
+      },
+      "text/plain": [
+       "HBox(children=(FloatProgress(value=0.0, description='Iteration', max=4.0, style=ProgressStyle(description_widt…"
+      ]
+     },
+     "metadata": {},
+     "output_type": "display_data"
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "\n",
+      "\n",
+      "CPU times: user 1min 50s, sys: 1min 2s, total: 2min 53s\n",
+      "Wall time: 1min 34s\n"
+     ]
+    },
+    {
+     "data": {
+      "text/plain": [
+       "TrainOutput(global_step=80, training_loss=8.863710474967956)"
+      ]
+     },
+     "execution_count": 47,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "%%time\n",
+    "trainer.train()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "colab_type": "text",
+    "id": "_ZkooHz1-_2h"
+   },
+   "source": [
+    "#### 🎉 Save final model (+ tokenizer + config) to disk"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 48,
+   "metadata": {
+    "colab": {},
+    "colab_type": "code",
+    "id": "QDNgPls7_l13"
+   },
+   "outputs": [],
+   "source": [
+    "trainer.save_model(\"./EsperBERTo\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 49,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "('./EsperBERTo/vocab.json',\n",
+       " './EsperBERTo/merges.txt',\n",
+       " './EsperBERTo/special_tokens_map.json',\n",
+       " './EsperBERTo/added_tokens.json')"
+      ]
+     },
+     "execution_count": 49,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "tokenizer.save_pretrained(\"./EsperBERTo\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "colab_type": "text",
+    "id": "d0caceCy_p1-"
+   },
+   "source": [
+    "## 4. Check that the LM actually trained"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "colab_type": "text",
+    "id": "iIQJ8ND_AEhl"
+   },
+   "source": [
+    "Aside from looking at the training and eval losses going down, the easiest way to check whether our language model is learning anything interesting is via the `FillMaskPipeline`.\n",
+    "\n",
+    "Pipelines are simple wrappers around tokenizers and models, and the 'fill-mask' one will let you input a sequence containing a masked token (here, `<mask>`) and return a list of the most probable filled sequences, with their probabilities.\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 50,
+   "metadata": {
+    "colab": {},
+    "colab_type": "code",
+    "id": "ltXgXyCbAJLY"
+   },
+   "outputs": [],
+   "source": [
+    "from transformers import pipeline\n",
+    "\n",
+    "fill_mask = pipeline(\n",
+    "    \"fill-mask\",\n",
+    "    model=\"./EsperBERTo\",\n",
+    "    tokenizer=\"./EsperBERTo\"\n",
+    ")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 52,
+   "metadata": {
+    "colab": {
+     "base_uri": "https://localhost:8080/",
+     "height": 283
+    },
+    "colab_type": "code",
+    "id": "UIvgZ3S6AO0z",
+    "outputId": "5f3d2f00-abdc-44a9-9c1b-75e3ec328576"
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "[{'sequence': '<s>Fuck the to.</s>',\n",
+       "  'score': 0.010831273160874844,\n",
+       "  'token': 291,\n",
+       "  'token_str': 'Ġto'},\n",
+       " {'sequence': '<s>Fuck the.,.</s>',\n",
+       "  'score': 0.0073946453630924225,\n",
+       "  'token': 294,\n",
+       "  'token_str': '.,'},\n",
+       " {'sequence': '<s>Fuck the a.</s>',\n",
+       "  'score': 0.006478145718574524,\n",
+       "  'token': 263,\n",
+       "  'token_str': 'Ġa'},\n",
+       " {'sequence': '<s>Fuck the’.</s>',\n",
+       "  'score': 0.006457648705691099,\n",
+       "  'token': 319,\n",
+       "  'token_str': 'âĢĻ'},\n",
+       " {'sequence': '<s>Fuck the is.</s>',\n",
+       "  'score': 0.004800752736628056,\n",
+       "  'token': 309,\n",
+       "  'token_str': 'Ġis'}]"
+      ]
+     },
+     "execution_count": 52,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "# The sun <mask>.\n",
+    "# =>\n",
+    "\n",
+    "fill_mask(\"Fuck the <mask>.\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "colab_type": "text",
+    "id": "i0qCyyhNAWZi"
+   },
+   "source": [
+    "Ok, simple syntax/grammar works. Let’s try a slightly more interesting prompt:\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 54,
+   "metadata": {
+    "colab": {
+     "base_uri": "https://localhost:8080/",
+     "height": 283
+    },
+    "colab_type": "code",
+    "id": "YZ9HSQxAAbme",
+    "outputId": "aabfeedc-b1d0-4837-b01d-cd42726a5a3d"
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "[{'sequence': '<s>\" is the president</s>',\n",
+       "  'score': 0.02240140736103058,\n",
+       "  'token': 6,\n",
+       "  'token_str': '\"'},\n",
+       " {'sequence': '<s> a is the president</s>',\n",
+       "  'score': 0.004178027156740427,\n",
+       "  'token': 263,\n",
+       "  'token_str': 'Ġa'},\n",
+       " {'sequence': '<s>., is the president</s>',\n",
+       "  'score': 0.0036898222751915455,\n",
+       "  'token': 294,\n",
+       "  'token_str': '.,'},\n",
+       " {'sequence': '<s>’ is the president</s>',\n",
+       "  'score': 0.0031965565867722034,\n",
+       "  'token': 319,\n",
+       "  'token_str': 'âĢĻ'},\n",
+       " {'sequence': '<s> to is the president</s>',\n",
+       "  'score': 0.0029191039502620697,\n",
+       "  'token': 291,\n",
+       "  'token_str': 'Ġto'}]"
+      ]
+     },
+     "execution_count": 54,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "fill_mask(\"<mask> is the president\")\n",
+    "\n",
+    "# This is the beginning of a beautiful <mask>.\n",
+    "# =>"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "colab_type": "text",
+    "id": "6RsGaD1qAfLP"
+   },
+   "source": [
+    "## 5. Share your model 🎉"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "colab_type": "text",
+    "id": "5oESe8djApQw"
+   },
+   "source": [
+    "Finally, when you have a nice model, please think about sharing it with the community:\n",
+    "\n",
+    "- upload your model using the CLI: `transformers-cli upload`\n",
+    "- write a README.md model card and add it to the repository under `model_cards/`. Your model card should ideally include:\n",
+    "    - a model description,\n",
+    "    - training params (dataset, preprocessing, hyperparameters), \n",
+    "    - evaluation results,\n",
+    "    - intended uses & limitations\n",
+    "    - whatever else is helpful! 🤓\n",
+    "\n",
+    "### **TADA!**\n",
+    "\n",
+    "➡️ Your model has a page on http://huggingface.co/models and everyone can load it using `AutoModel.from_pretrained(\"username/model_name\")`.\n",
+    "\n",
+    "[![tb](https://huggingface.co/blog/assets/01_how-to-train/model_page.png)](https://huggingface.co/julien-c/EsperBERTo-small)\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "colab_type": "text",
+    "id": "aw9ifsgqBI2o"
+   },
+   "source": [
+    "If you want to take a look at models in different languages, check https://huggingface.co/models\n",
+    "\n",
+    "[![all models](https://huggingface.co/front/thumbnails/models.png)](https://huggingface.co/models)\n"
+   ]
+  }
+ ],
+ "metadata": {
+  "accelerator": "GPU",
+  "colab": {
+   "collapsed_sections": [],
+   "include_colab_link": true,
+   "machine_shape": "hm",
+   "name": "01_how-to-train.ipynb",
+   "provenance": [],
+   "toc_visible": true
+  },
+  "kernelspec": {
+   "display_name": "Python 3",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.7.4"
+  },
+  "widgets": {
+   "application/vnd.jupyter.widget-state+json": {
+    "016d7c8318f742c1943464b08232a510": {
+     "model_module": "@jupyter-widgets/base",
+     "model_name": "LayoutModel",
+     "state": {
+      "_model_module": "@jupyter-widgets/base",
+      "_model_module_version": "1.2.0",
+      "_model_name": "LayoutModel",
+      "_view_count": null,
+      "_view_module": "@jupyter-widgets/base",
+      "_view_module_version": "1.2.0",
+      "_view_name": "LayoutView",
+      "align_content": null,
+      "align_items": null,
+      "align_self": null,
+      "border": null,
+      "bottom": null,
+      "display": null,
+      "flex": null,
+      "flex_flow": null,
+      "grid_area": null,
+      "grid_auto_columns": null,
+      "grid_auto_flow": null,
+      "grid_auto_rows": null,
+      "grid_column": null,
+      "grid_gap": null,
+      "grid_row": null,
+      "grid_template_areas": null,
+      "grid_template_columns": null,
+      "grid_template_rows": null,
+      "height": null,
+      "justify_content": null,
+      "justify_items": null,
+      "left": null,
+      "margin": null,
+      "max_height": null,
+      "max_width": null,
+      "min_height": null,
+      "min_width": null,
+      "object_fit": null,
+      "object_position": null,
+      "order": null,
+      "overflow": null,
+      "overflow_x": null,
+      "overflow_y": null,
+      "padding": null,
+      "right": null,
+      "top": null,
+      "visibility": null,
+      "width": null
+     }
+    },
+    "04e7e6d291da49d5816dc98a2904e95c": {
+     "model_module": "@jupyter-widgets/controls",
+     "model_name": "HTMLModel",
+     "state": {
+      "_dom_classes": [],
+      "_model_module": "@jupyter-widgets/controls",
+      "_model_module_version": "1.5.0",
+      "_model_name": "HTMLModel",
+      "_view_count": null,
+      "_view_module": "@jupyter-widgets/controls",
+      "_view_module_version": "1.5.0",
+      "_view_name": "HTMLView",
+      "description": "",
+      "description_tooltip": null,
+      "layout": "IPY_MODEL_39c23c6a972b419eb2eeeebafeaedc22",
+      "placeholder": "​",
+      "style": "IPY_MODEL_8388e9da9da4492c98c19235ca5fc1b5",
+      "value": " 15228/15228 [2:46:46&lt;00:00,  1.52it/s]"
+     }
+    },
+    "0989d41a4da24e9ebff377e02127642c": {
+     "model_module": "@jupyter-widgets/controls",
+     "model_name": "HBoxModel",
+     "state": {
+      "_dom_classes": [],
+      "_model_module": "@jupyter-widgets/controls",
+      "_model_module_version": "1.5.0",
+      "_model_name": "HBoxModel",
+      "_view_count": null,
+      "_view_module": "@jupyter-widgets/controls",
+      "_view_module_version": "1.5.0",
+      "_view_name": "HBoxView",
+      "box_style": "",
+      "children": [
+       "IPY_MODEL_d295dd80550447d88da0f04ce36a22ff",
+       "IPY_MODEL_04e7e6d291da49d5816dc98a2904e95c"
+      ],
+      "layout": "IPY_MODEL_42c6061ef7e44f179db5a6e3551c0f17"
+     }
+    },
+    "39c23c6a972b419eb2eeeebafeaedc22": {
+     "model_module": "@jupyter-widgets/base",
+     "model_name": "LayoutModel",
+     "state": {
+      "_model_module": "@jupyter-widgets/base",
+      "_model_module_version": "1.2.0",
+      "_model_name": "LayoutModel",
+      "_view_count": null,
+      "_view_module": "@jupyter-widgets/base",
+      "_view_module_version": "1.2.0",
+      "_view_name": "LayoutView",
+      "align_content": null,
+      "align_items": null,
+      "align_self": null,
+      "border": null,
+      "bottom": null,
+      "display": null,
+      "flex": null,
+      "flex_flow": null,
+      "grid_area": null,
+      "grid_auto_columns": null,
+      "grid_auto_flow": null,
+      "grid_auto_rows": null,
+      "grid_column": null,
+      "grid_gap": null,
+      "grid_row": null,
+      "grid_template_areas": null,
+      "grid_template_columns": null,
+      "grid_template_rows": null,
+      "height": null,
+      "justify_content": null,
+      "justify_items": null,
+      "left": null,
+      "margin": null,
+      "max_height": null,
+      "max_width": null,
+      "min_height": null,
+      "min_width": null,
+      "object_fit": null,
+      "object_position": null,
+      "order": null,
+      "overflow": null,
+      "overflow_x": null,
+      "overflow_y": null,
+      "padding": null,
+      "right": null,
+      "top": null,
+      "visibility": null,
+      "width": null
+     }
+    },
+    "40bf955ba0284e84b198da6be8654219": {
+     "model_module": "@jupyter-widgets/controls",
+     "model_name": "ProgressStyleModel",
+     "state": {
+      "_model_module": "@jupyter-widgets/controls",
+      "_model_module_version": "1.5.0",
+      "_model_name": "ProgressStyleModel",
+      "_view_count": null,
+      "_view_module": "@jupyter-widgets/base",
+      "_view_module_version": "1.2.0",
+      "_view_name": "StyleView",
+      "bar_color": null,
+      "description_width": "initial"
+     }
+    },
+    "42c6061ef7e44f179db5a6e3551c0f17": {
+     "model_module": "@jupyter-widgets/base",
+     "model_name": "LayoutModel",
+     "state": {
+      "_model_module": "@jupyter-widgets/base",
+      "_model_module_version": "1.2.0",
+      "_model_name": "LayoutModel",
+      "_view_count": null,
+      "_view_module": "@jupyter-widgets/base",
+      "_view_module_version": "1.2.0",
+      "_view_name": "LayoutView",
+      "align_content": null,
+      "align_items": null,
+      "align_self": null,
+      "border": null,
+      "bottom": null,
+      "display": null,
+      "flex": null,
+      "flex_flow": null,
+      "grid_area": null,
+      "grid_auto_columns": null,
+      "grid_auto_flow": null,
+      "grid_auto_rows": null,
+      "grid_column": null,
+      "grid_gap": null,
+      "grid_row": null,
+      "grid_template_areas": null,
+      "grid_template_columns": null,
+      "grid_template_rows": null,
+      "height": null,
+      "justify_content": null,
+      "justify_items": null,
+      "left": null,
+      "margin": null,
+      "max_height": null,
+      "max_width": null,
+      "min_height": null,
+      "min_width": null,
+      "object_fit": null,
+      "object_position": null,
+      "order": null,
+      "overflow": null,
+      "overflow_x": null,
+      "overflow_y": null,
+      "padding": null,
+      "right": null,
+      "top": null,
+      "visibility": null,
+      "width": null
+     }
+    },
+    "6feb10aeb43147e6aba028d065947ae8": {
+     "model_module": "@jupyter-widgets/base",
+     "model_name": "LayoutModel",
+     "state": {
+      "_model_module": "@jupyter-widgets/base",
+      "_model_module_version": "1.2.0",
+      "_model_name": "LayoutModel",
+      "_view_count": null,
+      "_view_module": "@jupyter-widgets/base",
+      "_view_module_version": "1.2.0",
+      "_view_name": "LayoutView",
+      "align_content": null,
+      "align_items": null,
+      "align_self": null,
+      "border": null,
+      "bottom": null,
+      "display": null,
+      "flex": null,
+      "flex_flow": null,
+      "grid_area": null,
+      "grid_auto_columns": null,
+      "grid_auto_flow": null,
+      "grid_auto_rows": null,
+      "grid_column": null,
+      "grid_gap": null,
+      "grid_row": null,
+      "grid_template_areas": null,
+      "grid_template_columns": null,
+      "grid_template_rows": null,
+      "height": null,
+      "justify_content": null,
+      "justify_items": null,
+      "left": null,
+      "margin": null,
+      "max_height": null,
+      "max_width": null,
+      "min_height": null,
+      "min_width": null,
+      "object_fit": null,
+      "object_position": null,
+      "order": null,
+      "overflow": null,
+      "overflow_x": null,
+      "overflow_y": null,
+      "padding": null,
+      "right": null,
+      "top": null,
+      "visibility": null,
+      "width": null
+     }
+    },
+    "837c9ddc3d594e088891874560c646b8": {
+     "model_module": "@jupyter-widgets/controls",
+     "model_name": "FloatProgressModel",
+     "state": {
+      "_dom_classes": [],
+      "_model_module": "@jupyter-widgets/controls",
+      "_model_module_version": "1.5.0",
+      "_model_name": "FloatProgressModel",
+      "_view_count": null,
+      "_view_module": "@jupyter-widgets/controls",
+      "_view_module_version": "1.5.0",
+      "_view_name": "ProgressView",
+      "bar_style": "success",
+      "description": "Epoch: 100%",
+      "description_tooltip": null,
+      "layout": "IPY_MODEL_fe20a8dae6e84628b5076d02183090f5",
+      "max": 1,
+      "min": 0,
+      "orientation": "horizontal",
+      "style": "IPY_MODEL_40bf955ba0284e84b198da6be8654219",
+      "value": 1
+     }
+    },
+    "8388e9da9da4492c98c19235ca5fc1b5": {
+     "model_module": "@jupyter-widgets/controls",
+     "model_name": "DescriptionStyleModel",
+     "state": {
+      "_model_module": "@jupyter-widgets/controls",
+      "_model_module_version": "1.5.0",
+      "_model_name": "DescriptionStyleModel",
+      "_view_count": null,
+      "_view_module": "@jupyter-widgets/base",
+      "_view_module_version": "1.2.0",
+      "_view_name": "StyleView",
+      "description_width": ""
+     }
+    },
+    "93b3f9eae3cb4e3e859cf456e3547c6d": {
+     "model_module": "@jupyter-widgets/controls",
+     "model_name": "DescriptionStyleModel",
+     "state": {
+      "_model_module": "@jupyter-widgets/controls",
+      "_model_module_version": "1.5.0",
+      "_model_name": "DescriptionStyleModel",
+      "_view_count": null,
+      "_view_module": "@jupyter-widgets/base",
+      "_view_module_version": "1.2.0",
+      "_view_name": "StyleView",
+      "description_width": ""
+     }
+    },
+    "a491e8caa0a048beb3b5259f14eb233f": {
+     "model_module": "@jupyter-widgets/base",
+     "model_name": "LayoutModel",
+     "state": {
+      "_model_module": "@jupyter-widgets/base",
+      "_model_module_version": "1.2.0",
+      "_model_name": "LayoutModel",
+      "_view_count": null,
+      "_view_module": "@jupyter-widgets/base",
+      "_view_module_version": "1.2.0",
+      "_view_name": "LayoutView",
+      "align_content": null,
+      "align_items": null,
+      "align_self": null,
+      "border": null,
+      "bottom": null,
+      "display": null,
+      "flex": null,
+      "flex_flow": null,
+      "grid_area": null,
+      "grid_auto_columns": null,
+      "grid_auto_flow": null,
+      "grid_auto_rows": null,
+      "grid_column": null,
+      "grid_gap": null,
+      "grid_row": null,
+      "grid_template_areas": null,
+      "grid_template_columns": null,
+      "grid_template_rows": null,
+      "height": null,
+      "justify_content": null,
+      "justify_items": null,
+      "left": null,
+      "margin": null,
+      "max_height": null,
+      "max_width": null,
+      "min_height": null,
+      "min_width": null,
+      "object_fit": null,
+      "object_position": null,
+      "order": null,
+      "overflow": null,
+      "overflow_x": null,
+      "overflow_y": null,
+      "padding": null,
+      "right": null,
+      "top": null,
+      "visibility": null,
+      "width": null
+     }
+    },
+    "a58a66392b644b1384661e850c077a6c": {
+     "model_module": "@jupyter-widgets/controls",
+     "model_name": "HBoxModel",
+     "state": {
+      "_dom_classes": [],
+      "_model_module": "@jupyter-widgets/controls",
+      "_model_module_version": "1.5.0",
+      "_model_name": "HBoxModel",
+      "_view_count": null,
+      "_view_module": "@jupyter-widgets/controls",
+      "_view_module_version": "1.5.0",
+      "_view_name": "HBoxView",
+      "box_style": "",
+      "children": [
+       "IPY_MODEL_837c9ddc3d594e088891874560c646b8",
+       "IPY_MODEL_dbf50873d62c4ba39321faefbed0cca5"
+      ],
+      "layout": "IPY_MODEL_a491e8caa0a048beb3b5259f14eb233f"
+     }
+    },
+    "d295dd80550447d88da0f04ce36a22ff": {
+     "model_module": "@jupyter-widgets/controls",
+     "model_name": "FloatProgressModel",
+     "state": {
+      "_dom_classes": [],
+      "_model_module": "@jupyter-widgets/controls",
+      "_model_module_version": "1.5.0",
+      "_model_name": "FloatProgressModel",
+      "_view_count": null,
+      "_view_module": "@jupyter-widgets/controls",
+      "_view_module_version": "1.5.0",
+      "_view_name": "ProgressView",
+      "bar_style": "success",
+      "description": "Iteration: 100%",
+      "description_tooltip": null,
+      "layout": "IPY_MODEL_016d7c8318f742c1943464b08232a510",
+      "max": 15228,
+      "min": 0,
+      "orientation": "horizontal",
+      "style": "IPY_MODEL_e7d8c3a4fecd40778e32966b29ea65a1",
+      "value": 15228
+     }
+    },
+    "dbf50873d62c4ba39321faefbed0cca5": {
+     "model_module": "@jupyter-widgets/controls",
+     "model_name": "HTMLModel",
+     "state": {
+      "_dom_classes": [],
+      "_model_module": "@jupyter-widgets/controls",
+      "_model_module_version": "1.5.0",
+      "_model_name": "HTMLModel",
+      "_view_count": null,
+      "_view_module": "@jupyter-widgets/controls",
+      "_view_module_version": "1.5.0",
+      "_view_name": "HTMLView",
+      "description": "",
+      "description_tooltip": null,
+      "layout": "IPY_MODEL_6feb10aeb43147e6aba028d065947ae8",
+      "placeholder": "​",
+      "style": "IPY_MODEL_93b3f9eae3cb4e3e859cf456e3547c6d",
+      "value": " 1/1 [2:46:46&lt;00:00, 10006.17s/it]"
+     }
+    },
+    "e7d8c3a4fecd40778e32966b29ea65a1": {
+     "model_module": "@jupyter-widgets/controls",
+     "model_name": "ProgressStyleModel",
+     "state": {
+      "_model_module": "@jupyter-widgets/controls",
+      "_model_module_version": "1.5.0",
+      "_model_name": "ProgressStyleModel",
+      "_view_count": null,
+      "_view_module": "@jupyter-widgets/base",
+      "_view_module_version": "1.2.0",
+      "_view_name": "StyleView",
+      "bar_color": null,
+      "description_width": "initial"
+     }
+    },
+    "fe20a8dae6e84628b5076d02183090f5": {
+     "model_module": "@jupyter-widgets/base",
+     "model_name": "LayoutModel",
+     "state": {
+      "_model_module": "@jupyter-widgets/base",
+      "_model_module_version": "1.2.0",
+      "_model_name": "LayoutModel",
+      "_view_count": null,
+      "_view_module": "@jupyter-widgets/base",
+      "_view_module_version": "1.2.0",
+      "_view_name": "LayoutView",
+      "align_content": null,
+      "align_items": null,
+      "align_self": null,
+      "border": null,
+      "bottom": null,
+      "display": null,
+      "flex": null,
+      "flex_flow": null,
+      "grid_area": null,
+      "grid_auto_columns": null,
+      "grid_auto_flow": null,
+      "grid_auto_rows": null,
+      "grid_column": null,
+      "grid_gap": null,
+      "grid_row": null,
+      "grid_template_areas": null,
+      "grid_template_columns": null,
+      "grid_template_rows": null,
+      "height": null,
+      "justify_content": null,
+      "justify_items": null,
+      "left": null,
+      "margin": null,
+      "max_height": null,
+      "max_width": null,
+      "min_height": null,
+      "min_width": null,
+      "object_fit": null,
+      "object_position": null,
+      "order": null,
+      "overflow": null,
+      "overflow_x": null,
+      "overflow_y": null,
+      "padding": null,
+      "right": null,
+      "top": null,
+      "visibility": null,
+      "width": null
+     }
+    }
+   }
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 1
+}
